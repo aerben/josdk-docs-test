@@ -1,4 +1,4 @@
-# Sample workflow for building and deploying a Hugo site to GitHub Pages
+# Workflow for building and deploying a versioned Hugo site to GitHub Pages
 name: Deploy Hugo site to Pages
 
 on:
@@ -59,14 +59,14 @@ jobs:
         uses: actions/configure-pages@v6
       - name: Install Node.js dependencies
         working-directory: ./docs
-        run: |          
-          [[ -f package-lock.json || -f npm-shrinkwrap.json ]] && npm ci || true
-          npm install -D autoprefixer
-          npm install -D postcss-cli
-          npm install -D postcss
-      - name: Build with Hugo
+        run: |
+          if [[ -f package-lock.json || -f npm-shrinkwrap.json ]]; then
+            npm ci
+          else
+            npm install --no-save autoprefixer postcss-cli postcss
+          fi
+      - name: Build latest docs
         env:
-          # For maximum backward compatibility with Hugo modules
           HUGO_ENVIRONMENT: production
           HUGO_ENV: production
           TZ: America/Los_Angeles
@@ -76,6 +76,66 @@ jobs:
             --gc \
             --minify \
             --baseURL "${{ steps.pages.outputs.base_url }}/"
+      - name: Build versioned docs
+        env:
+          HUGO_ENVIRONMENT: production
+          HUGO_ENV: production
+          TZ: America/Los_Angeles
+        run: |
+          BASE_URL="${{ steps.pages.outputs.base_url }}"
+
+          # Each entry is "git-tag:version-label"
+          # Update these when releasing new minor versions.
+          VERSIONS=("v5.3.3:v5.3" "v5.2.3:v5.2" "v5.1.5:v5.1" "v5.0.5:v5.0")
+
+          # Generate version dropdown TOML from VERSIONS array so the
+          # archived builds always match the list defined here.
+          VERSIONS_TOML="# Version entries for the version selector dropdown."$'\n'
+          VERSIONS_TOML+=$'[[params.versions]]\n  version = "latest"\n  url = "/"\n'
+          for entry in "${VERSIONS[@]}"; do
+            LABEL="${entry##*:}"
+            VERSIONS_TOML+=$'\n[[params.versions]]\n'
+            VERSIONS_TOML+="  version = \"${LABEL}\""$'\n'
+            VERSIONS_TOML+="  url = \"/${LABEL}/\""$'\n'
+          done
+
+          for entry in "${VERSIONS[@]}"; do
+            TAG="${entry%%:*}"
+            LABEL="${entry##*:}"
+            echo "::group::Building docs for ${LABEL} (from tag ${TAG})"
+
+            WORKDIR="/tmp/docs-${LABEL}"
+            mkdir -p "${WORKDIR}"
+
+            # Extract docs directory from the tagged version
+            git archive "${TAG}" -- docs/ | tar -x -C "${WORKDIR}"
+
+            # Copy node_modules for PostCSS (shared across all builds)
+            cp -r docs/node_modules "${WORKDIR}/docs/" 2>/dev/null || true
+
+            # Patch hugo.toml for archived version
+            HUGO_TOML="${WORKDIR}/docs/hugo.toml"
+            sed -i 's/^version = .*/version = "'"${LABEL}"'"/' "${HUGO_TOML}"
+            sed -i 's/^archived_version = .*/archived_version = true/' "${HUGO_TOML}"
+
+            # Append version dropdown entries
+            echo "${VERSIONS_TOML}" >> "${HUGO_TOML}"
+
+            # Build Hugo for this version
+            hugo \
+              --source "${WORKDIR}/docs" \
+              --gc \
+              --minify \
+              --baseURL "${BASE_URL}/${LABEL}/"
+
+            # Move output into the latest build's public directory as a subdirectory
+            mv "${WORKDIR}/docs/public" "docs/public/${LABEL}"
+
+            # Clean up
+            rm -rf "${WORKDIR}"
+
+            echo "::endgroup::"
+          done
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
         with:
