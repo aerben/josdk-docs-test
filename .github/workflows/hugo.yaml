@@ -121,8 +121,10 @@ jobs:
             # Append version dropdown entries
             echo "${VERSIONS_TOML}" >> "${HUGO_TOML}"
 
-            # Build Hugo for this version
-            hugo \
+            # Build Hugo for this version.
+            # HUGO_ENABLEGITINFO=false because git archive extracts files
+            # without a .git directory, so git log would fail otherwise.
+            HUGO_ENABLEGITINFO=false hugo \
               --source "${WORKDIR}/docs" \
               --gc \
               --minify \
